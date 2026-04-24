@@ -78,10 +78,16 @@ function SciMLBase.__solve(
     box = minimum(root)
     t1 = time()
     stats = OptimizationBase.OptimizationStats(; time = t1 - t0)
+    # QuadDIRECT's `analyze` doesn't expose a termination status in its return,
+    # but each `Box` carries a `qnconverged` flag set when the quasi-Newton
+    # refinement step converged in that box. If the best box converged, surface
+    # `Success`; otherwise the loop was most likely cut short by `maxevals`.
+    retcode = box.qnconverged ? SciMLBase.ReturnCode.Success :
+        SciMLBase.ReturnCode.MaxIters
     return SciMLBase.build_solution(
         SciMLBase.DefaultOptimizationCache(prob.f, prob.p), opt,
         QuadDIRECT.position(box, x0), QuadDIRECT.value(box);
-        original = root, stats = stats
+        original = root, retcode = retcode, stats = stats
     )
 end
 

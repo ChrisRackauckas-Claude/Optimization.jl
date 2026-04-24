@@ -1,4 +1,5 @@
 using OptimizationOptimisers, ForwardDiff, OptimizationBase
+using OptimizationBase: SciMLBase
 using Test
 using Zygote
 using Lux, MLUtils, Random, ComponentArrays, Printf, MLDataDevices
@@ -36,6 +37,15 @@ using Lux, MLUtils, Random, ComponentArrays, Printf, MLDataDevices
     prob = OptimizationProblem(optprob, x0, _p)
     sol = solve(prob, Optimisers.Adam(), maxiters = 1000, progress = false)
     @test 10 * sol.objective < l1
+    # Full epoch run with no callback halt -> Success.
+    @test sol.retcode == SciMLBase.ReturnCode.Success
+
+    # Callback-requested halt -> Terminated.
+    sol_halt = solve(
+        prob, Optimisers.Adam(), maxiters = 1000, progress = false,
+        callback = (args...) -> true
+    )
+    @test sol_halt.retcode == SciMLBase.ReturnCode.Terminated
 
     x0 = 2 * ones(ComplexF64, 2)
     _p = ones(2)

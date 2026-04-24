@@ -1,4 +1,5 @@
 using OptimizationMetaheuristics, OptimizationBase, Random
+using OptimizationBase: SciMLBase
 using Test
 
 Random.seed!(42)
@@ -14,6 +15,23 @@ Random.seed!(42)
     )
     sol = solve(prob, ECA())
     @test 10 * sol.objective < l1
+    @test sol.retcode isa SciMLBase.ReturnCode.T
+
+    @testset "_metaheuristics_retcode status mapping" begin
+        m = OptimizationMetaheuristics._metaheuristics_retcode
+        # Only the termination types with no-arg constructors are checked here;
+        # `ConvergenceTermination` / `MOOConvergenceTermination` require
+        # tolerance arguments but are still handled by the `isa` branches
+        # in `_metaheuristics_retcode`.
+        @test m(Metaheuristics.IterationLimit()) == SciMLBase.ReturnCode.MaxIters
+        @test m(Metaheuristics.EvaluationsLimit()) == SciMLBase.ReturnCode.MaxIters
+        @test m(Metaheuristics.TimeLimit()) == SciMLBase.ReturnCode.MaxTime
+        @test m(Metaheuristics.AccuracyLimit()) == SciMLBase.ReturnCode.Success
+        @test m(Metaheuristics.ObjectiveDifferenceLimit()) == SciMLBase.ReturnCode.Success
+        @test m(Metaheuristics.ObjectiveVarianceLimit()) == SciMLBase.ReturnCode.Success
+        @test m(Metaheuristics.OtherLimit()) == SciMLBase.ReturnCode.Default
+        @test m(Metaheuristics.UnknownStopReason()) == SciMLBase.ReturnCode.Default
+    end
 
     sol = solve(prob, Metaheuristics.DE())
     @test 10 * sol.objective < l1

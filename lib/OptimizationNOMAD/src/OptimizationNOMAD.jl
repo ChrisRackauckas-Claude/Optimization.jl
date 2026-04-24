@@ -125,10 +125,22 @@ function SciMLBase.__solve(
     opt_res = NOMAD.solve(opt_setup, prob.u0)
     t1 = time()
     stats = OptimizationBase.OptimizationStats(; time = t1 - t0)
+    # NOMAD.solve returns a NamedTuple with `x_best_feas` / `x_best_inf`; the
+    # underlying termination reason is only printed to stdout (NOMAD's C++ API
+    # does not expose it to the Julia wrapper). Classify by which bucket has
+    # a point: feasible best exists -> Success; only infeasible best -> Infeasible;
+    # neither -> Failure.
+    retcode = if opt_res.x_best_feas !== nothing
+        SciMLBase.ReturnCode.Success
+    elseif opt_res.x_best_inf !== nothing
+        SciMLBase.ReturnCode.Infeasible
+    else
+        SciMLBase.ReturnCode.Failure
+    end
     return SciMLBase.build_solution(
         SciMLBase.DefaultOptimizationCache(prob.f, prob.p), opt,
         opt_res.x_best_feas, first(opt_res.bbo_best_feas);
-        original = opt_res, stats = stats
+        original = opt_res, retcode = retcode, stats = stats
     )
 end
 

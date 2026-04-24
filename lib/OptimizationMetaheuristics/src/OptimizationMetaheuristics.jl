@@ -9,6 +9,26 @@ SciMLBase.allowsbounds(opt::Metaheuristics.AbstractAlgorithm) = true
 SciMLBase.allowscallback(opt::Metaheuristics.AbstractAlgorithm) = false
 SciMLBase.has_init(opt::Metaheuristics.AbstractAlgorithm) = true
 
+# Map `Metaheuristics.Result.termination_status_code` (a subtype of
+# `Metaheuristics.AbstractTermination`) to a `SciMLBase.ReturnCode.T`.
+function _metaheuristics_retcode(status)
+    if status isa Metaheuristics.IterationLimit ||
+            status isa Metaheuristics.EvaluationsLimit
+        return SciMLBase.ReturnCode.MaxIters
+    elseif status isa Metaheuristics.TimeLimit
+        return SciMLBase.ReturnCode.MaxTime
+    elseif status isa Metaheuristics.AccuracyLimit ||
+            status isa Metaheuristics.ConvergenceTermination ||
+            status isa Metaheuristics.MOOConvergenceTermination ||
+            status isa Metaheuristics.ObjectiveDifferenceLimit ||
+            status isa Metaheuristics.ObjectiveVarianceLimit
+        return SciMLBase.ReturnCode.Success
+    else
+        # OtherLimit, UnknownStopReason, custom Termination
+        return SciMLBase.ReturnCode.Default
+    end
+end
+
 function initial_population!(opt, cache, bounds, f)
     opt_init = deepcopy(opt)
     opt_init.options.iterations = 2
@@ -150,6 +170,7 @@ function SciMLBase.__solve(cache::OptimizationCache{O}) where {
         cache, cache.opt,
         Metaheuristics.minimizer(opt_res),
         Metaheuristics.minimum(opt_res); original = opt_res,
+        retcode = _metaheuristics_retcode(opt_res.termination_status_code),
         stats = stats
     )
 end

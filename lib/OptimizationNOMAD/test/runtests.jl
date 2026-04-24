@@ -1,4 +1,5 @@
 using OptimizationNOMAD, OptimizationBase
+using OptimizationBase: SciMLBase
 using Test
 
 @testset "OptimizationNOMAD.jl" begin
@@ -12,6 +13,8 @@ using Test
     prob = OptimizationProblem(f, x0, _p)
     sol = OptimizationBase.solve(prob, NOMADOpt())
     @test 10 * sol.objective < l1
+    # A feasible point is always found for the unconstrained rosenbrock.
+    @test sol.retcode == SciMLBase.ReturnCode.Success
 
     prob = OptimizationProblem(f, x0, _p; lb = [-1.0, -1.0], ub = [1.5, 1.5])
     sol = OptimizationBase.solve(prob, NOMADOpt())

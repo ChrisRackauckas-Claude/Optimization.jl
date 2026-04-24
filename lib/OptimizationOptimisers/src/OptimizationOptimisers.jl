@@ -159,7 +159,14 @@ function SciMLBase.__solve(cache::OptimizationCache{O}) where {O <: AbstractRule
         iterations,
         time = t1 - t0, fevals, gevals
     )
-    return SciMLBase.build_solution(cache, cache.opt, θ, first(x)[1], stats = stats)
+    # Optimisers has no built-in convergence test; the normal termination is
+    # completing every epoch. A callback returning `true` (captured in
+    # `breakall`) is treated as a user-requested early stop.
+    retcode = breakall ? SciMLBase.ReturnCode.Terminated :
+        SciMLBase.ReturnCode.Success
+    return SciMLBase.build_solution(
+        cache, cache.opt, θ, first(x)[1]; stats = stats, retcode = retcode
+    )
 end
 
 end
