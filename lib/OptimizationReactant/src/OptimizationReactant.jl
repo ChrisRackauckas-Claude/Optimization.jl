@@ -199,18 +199,7 @@ end
 function _lag_h_objective(f, co, mode, annot)
     af = annot(f)
     return (θ, σ, λ, p) -> begin
-        # `sum(λ .* c)` fuses into a `stablehlo.reduce` whose adjoint is
-        # unsupported under nested autodiff; the unrolled product-sum avoids it.
-        L = Const(
-            (θ2, p2) -> begin
-                c = co(θ2, p2)
-                s = σ * f(θ2, p2)
-                for i in eachindex(c)
-                    s = s + λ[i] * c[i]
-                end
-                return s
-            end
-        )
+        L = Const((θ2, p2) -> σ * f(θ2, p2) + sum(λ .* co(θ2, p2)))
         gL = Const((θ2, p2) -> Enzyme.gradient(mode, L, θ2, Const(p2))[1])
         return _hessian_cols(gL, θ, p)
     end
