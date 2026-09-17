@@ -115,6 +115,9 @@ function _hvp_in_trace(gcl, u, v, p)
 end
 
 # Dense Hessian as `length(u)` Hessian-vector products over basis vectors.
+# TODO: switch to capped `BatchDuplicated` chunks (as in OptimizationBase's
+# `_HESSIAN_BATCH_CAP = 8` AutoEnzyme path) once batched forward mode works
+# in the trace: EnzymeAD/Reactant.jl#3295 and EnzymeAD/Reactant.jl#3296.
 function _hessian_cols(gcl, u, p)
     es = Enzyme.onehot(u)
     return hcat(ntuple(i -> _hvp_in_trace(gcl, u, es[i], p), length(u))...)
