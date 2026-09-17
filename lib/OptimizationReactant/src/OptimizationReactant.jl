@@ -29,8 +29,16 @@ export AutoReactant
 
 _to_rarray(x) = Reactant.to_rarray(x; track_numbers = AbstractFloat)
 
+# Compiled programs are shared across `instantiate_function` calls: the outer
+# `IdDict` pins the program-identity object (the `OptimizationFunction`), so a
+# key can never collide with a different function that later reuses its
+# address, and the inner `Dict` separates derivative programs and argument
+# signatures. Re-`init`/`solve` on the same problem (e.g. after `remake`)
+# therefore reuses the already-compiled XLA executables instead of retracing.
+const _THUNK_CACHE = IdDict{Any, Dict{Any, Any}}()
+
 """
-    CompiledCall(f)
+    CompiledCall(f; key = f, role = nothing)
 
 Callable that dispatches `f` to a `Reactant.compile`d program specialized on
 the (converted) argument types. Arguments are moved to the device with
@@ -40,17 +48,23 @@ the first call for a given signature compiles (and runs) the program, and
 later calls with the same signature reuse it. Passing host `Array`s keeps
 working but pays a host-to-device copy per call; place `u0`/`p` on the device
 once with `Reactant.to_rarray` to avoid it.
+
+`key` identifies the traced program across `CompiledCall` instances (thunks
+are shared module-wide in `_THUNK_CACHE`), and `role` distinguishes the
+different derivative programs built on the same `key`.
 """
 struct CompiledCall{F}
     f::F
-    thunks::Dict{Any, Any}
+    key::Any
+    role::Any
 end
 
-CompiledCall(f::F) where {F} = CompiledCall{F}(f, Dict{Any, Any}())
+CompiledCall(f::F; key = f, role = nothing) where {F} = CompiledCall{F}(f, key, role)
 
 function (c::CompiledCall)(args...)
     rargs = map(_to_rarray, args)
-    thunk = get!(c.thunks, map(typeof, rargs)) do
+    per_fn = get!(() -> Dict{Any, Any}(), _THUNK_CACHE, c.key)
+    thunk = get!(per_fn, (c.role, map(typeof, rargs))) do
         # Scalar `x[i]` indexing is routine in user objectives; inside the
         # trace it becomes a gather/slice op, which is correct, just slower.
         return GPUArraysCore.allowscalar(() -> Reactant.compile(c.f, rargs))
@@ -245,27 +259,49 @@ function instantiate_function(
     mode = _mode(adtype)
     annot = _annot(adtype)
 
-    cc_f = CompiledCall(f.f)
-    cc_g = CompiledCall(_grad_objective(f.f, mode, annot))
-    cc_fg = CompiledCall(_value_grad_objective(f.f, mode, annot))
+    cc_f = CompiledCall(f.f; key = f, role = :f)
+    cc_g = CompiledCall(
+        _grad_objective(f.f, mode, annot); key = f, role = (:grad, mode, annot)
+    )
+    cc_fg = CompiledCall(
+        _value_grad_objective(f.f, mode, annot); key = f, role = (:fg, mode, annot)
+    )
 
     co = f.cons === nothing ? nothing : _cons_oop(f, num_cons)
     cc_h = h == true && f.hess === nothing ?
-        CompiledCall(_hessian_objective(f.f, mode, annot)) : nothing
+        CompiledCall(
+            _hessian_objective(f.f, mode, annot);
+            key = f, role = (:hess, mode, annot)
+        ) : nothing
     cc_hv = hv == true && f.hv === nothing ?
-        CompiledCall(_hvp_objective(f.f, mode, annot)) : nothing
+        CompiledCall(
+            _hvp_objective(f.f, mode, annot);
+            key = f, role = (:hv, mode, annot)
+        ) : nothing
     cc_fgh = fgh == true && f.fgh === nothing ?
-        CompiledCall(_value_grad_hess_objective(f.f, mode, annot)) : nothing
+        CompiledCall(
+            _value_grad_hess_objective(f.f, mode, annot);
+            key = f, role = (:fgh, mode, annot)
+        ) : nothing
     cc_cj = cons_j == true && co !== nothing && f.cons_j === nothing ?
-        CompiledCall(_cons_j_objective(co)) : nothing
+        CompiledCall(_cons_j_objective(co); key = f, role = (:cons_j, num_cons)) : nothing
     cc_cvjp = cons_vjp == true && co !== nothing && f.cons_vjp === nothing ?
-        CompiledCall(_cons_vjp_objective(co, mode)) : nothing
+        CompiledCall(
+            _cons_vjp_objective(co, mode);
+            key = f, role = (:cons_vjp, num_cons, mode)
+        ) : nothing
     cc_cjvp = cons_jvp == true && co !== nothing && f.cons_jvp === nothing ?
-        CompiledCall(_cons_jvp_objective(co)) : nothing
+        CompiledCall(_cons_jvp_objective(co); key = f, role = (:cons_jvp, num_cons)) : nothing
     cc_ch = cons_h == true && co !== nothing && f.cons_h === nothing ?
-        CompiledCall(_cons_h_objective(co, mode, num_cons)) : nothing
+        CompiledCall(
+            _cons_h_objective(co, mode, num_cons);
+            key = f, role = (:cons_h, num_cons, mode)
+        ) : nothing
     cc_lag = lag_h == true && co !== nothing && f.lag_h === nothing ?
-        CompiledCall(_lag_h_objective(f.f, co, mode, annot)) : nothing
+        CompiledCall(
+            _lag_h_objective(f.f, co, mode, annot);
+            key = f, role = (:lag_h, num_cons, mode, annot)
+        ) : nothing
 
     fnew = let cc_f = cc_f, p = p
         (θ, p = p) -> _scalar(cc_f(θ, p))
@@ -486,26 +522,48 @@ function instantiate_function(
     mode = _mode(adtype)
     annot = _annot(adtype)
 
-    cc_f = CompiledCall(f.f)
-    cc_g = CompiledCall(_grad_objective(f.f, mode, annot))
-    cc_fg = CompiledCall(_value_grad_objective(f.f, mode, annot))
+    cc_f = CompiledCall(f.f; key = f, role = :f)
+    cc_g = CompiledCall(
+        _grad_objective(f.f, mode, annot); key = f, role = (:grad, mode, annot)
+    )
+    cc_fg = CompiledCall(
+        _value_grad_objective(f.f, mode, annot); key = f, role = (:fg, mode, annot)
+    )
 
     cc_h = h == true && f.hess === nothing ?
-        CompiledCall(_hessian_objective(f.f, mode, annot)) : nothing
+        CompiledCall(
+            _hessian_objective(f.f, mode, annot);
+            key = f, role = (:hess, mode, annot)
+        ) : nothing
     cc_hv = hv == true && f.hv === nothing ?
-        CompiledCall(_hvp_objective(f.f, mode, annot)) : nothing
+        CompiledCall(
+            _hvp_objective(f.f, mode, annot);
+            key = f, role = (:hv, mode, annot)
+        ) : nothing
     cc_fgh = fgh == true && f.fgh === nothing ?
-        CompiledCall(_value_grad_hess_objective(f.f, mode, annot)) : nothing
+        CompiledCall(
+            _value_grad_hess_objective(f.f, mode, annot);
+            key = f, role = (:fgh, mode, annot)
+        ) : nothing
     cc_cj = cons_j == true && f.cons !== nothing && f.cons_j === nothing ?
-        CompiledCall(_cons_j_objective(f.cons)) : nothing
+        CompiledCall(_cons_j_objective(f.cons); key = f, role = (:cons_j, num_cons)) : nothing
     cc_cvjp = cons_vjp == true && f.cons !== nothing && f.cons_vjp === nothing ?
-        CompiledCall(_cons_vjp_objective(f.cons, mode)) : nothing
+        CompiledCall(
+            _cons_vjp_objective(f.cons, mode);
+            key = f, role = (:cons_vjp, num_cons, mode)
+        ) : nothing
     cc_cjvp = cons_jvp == true && f.cons !== nothing && f.cons_jvp === nothing ?
-        CompiledCall(_cons_jvp_objective(f.cons)) : nothing
+        CompiledCall(_cons_jvp_objective(f.cons); key = f, role = (:cons_jvp, num_cons)) : nothing
     cc_ch = cons_h == true && f.cons !== nothing && f.cons_h === nothing ?
-        CompiledCall(_cons_h_objective(f.cons, mode, num_cons)) : nothing
+        CompiledCall(
+            _cons_h_objective(f.cons, mode, num_cons);
+            key = f, role = (:cons_h, num_cons, mode)
+        ) : nothing
     cc_lag = lag_h == true && f.cons !== nothing && f.lag_h === nothing ?
-        CompiledCall(_lag_h_objective(f.f, f.cons, mode, annot)) : nothing
+        CompiledCall(
+            _lag_h_objective(f.f, f.cons, mode, annot);
+            key = f, role = (:lag_h, num_cons, mode, annot)
+        ) : nothing
 
     fnew = let cc_f = cc_f, p = p
         (θ, p = p) -> _scalar(cc_f(θ, p))

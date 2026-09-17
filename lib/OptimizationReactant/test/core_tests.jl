@@ -216,6 +216,34 @@ using Test
         )
     end
 
+    @testset "compiled programs are shared across instantiations" begin
+        # distinct objective so the cache key cannot collide with earlier testsets
+        quartic(x, p) = sum(abs2, x) + p[1] * sum(abs2, x .^ 2)
+        optf_s = OptimizationFunction(quartic, AutoReactant())
+        f1 = OptimizationBase.instantiate_function(
+            optf_s, x0, AutoReactant(), p, 0; g = true
+        )
+        per_fn = OptimizationReactant._THUNK_CACHE[optf_s]
+        n_thunks = length(per_fn)
+        # a second instantiation of the same function reuses the thunks
+        f2 = OptimizationBase.instantiate_function(
+            optf_s, x0, AutoReactant(), p, 0; g = true
+        )
+        @test length(OptimizationReactant._THUNK_CACHE[optf_s]) == n_thunks
+        # requesting an additional derivative adds its thunk under the same key
+        f3 = OptimizationBase.instantiate_function(
+            optf_s, x0, AutoReactant(), p, 0; g = true, hv = true
+        )
+        @test length(OptimizationReactant._THUNK_CACHE[optf_s]) > n_thunks
+        G1, G2 = zeros(2), zeros(2)
+        f1.grad(G1, x0, p)
+        f2.grad(G2, x0, p)
+        @test G1 == G2 ≈ ForwardDiff.gradient(x -> quartic(x, p), x0)
+        v = ones(2)
+        @test f3.hv(zeros(2), x0, v, p) ≈
+            ForwardDiff.hessian(x -> quartic(x, p), x0) * v
+    end
+
     @testset "end-to-end solve" begin
         quadratic(x, p) = sum(abs2, x .- p)
         optf_q = OptimizationFunction(quadratic, AutoReactant())
