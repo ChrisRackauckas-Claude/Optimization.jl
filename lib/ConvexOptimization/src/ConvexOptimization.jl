@@ -107,9 +107,10 @@ evaluated as exact θ-data at `init` and every `reinit!` (a literal square such 
 `p[1]^2` keeps its nonnegative sign, so `norm(u)^2 - p[1]^2` and
 `p[1]^2 * norm(u)^2` are accepted). Other parameter-only expressions (`p[1]^4`,
 `inv(p[1])`, `sqrt`, `hypot`, products of parameter atoms like `abs(p[1])*abs(p[2])`)
-are refused as "not affine in the parameters". An objective that is only convex at
-some parameter values can be solved by re-canonicalizing with
-`solve(remake(prob; p = θ), alg)` at each `θ`.
+are refused as "not affine in the parameters". Nested compositions whose curvature
+depends on the sign of a parameter expression are refused at every `θ` — remaking
+with a numeric `p` does not help, because the nested certificate still treats
+parameters as symbolic.
 """
 struct ConvexMOI{O} <: AbstractConvexOptAlgorithm
     optimizer_constructor::O
@@ -333,8 +334,8 @@ function _certify_nested(prob, tr)
         prob, res, tr;
         suffix = isempty(tr.params) ? "" :
             " Parameters are kept symbolic in the certificate, so the curvature " *
-            "may also depend on `p`; if it is only convex at some parameter " *
-            "values, re-canonicalize with `solve(remake(prob; p = …), alg)`."
+            "may also depend on `p`; remaking with a numeric `p` does not change " *
+            "that (the nested path never substitutes θ)."
     )
     cons_res = isempty(tr.params) ? _certify_constraints(prob, tr) : nothing
     return (; objective = res, constraints = cons_res)
@@ -1405,6 +1406,17 @@ function _collect_atoms_deep!(acc, ex)
     ex isa AbstractArray &&
         return (foreach(e -> _collect_atoms_deep!(acc, e), ex); acc)
     Symbolics.iscall(ex) || return acc
+    op = Symbolics.operation(ex)
+    # Variadic `max`/`min` traces as nested binary calls. Flatten and only
+    # recurse into leaf arguments so the chain is one flat atom (matching the
+    # shallow collector), not a nested composition of binary extrema.
+    if (op === max || op === min) && _is_lowerable_atom(ex)
+        for a in _flatten_atom_args(ex, op)
+            _collect_atoms_deep!(acc, a)
+        end
+        any(isequal(ex), acc) || push!(acc, ex)
+        return acc
+    end
     for a in Symbolics.arguments(ex)
         _collect_atoms_deep!(acc, a)
     end
@@ -1412,8 +1424,12 @@ function _collect_atoms_deep!(acc, ex)
     return acc
 end
 
-_has_inner_atom(t) =
-    any(a -> !isempty(_collect_atoms!([], unwrap(a))), Symbolics.arguments(t))
+function _has_inner_atom(t)
+    op = Symbolics.operation(t)
+    args = (op === max || op === min) ? _flatten_atom_args(t, op) :
+        Symbolics.arguments(t)
+    return any(a -> !isempty(_collect_atoms!([], unwrap(a))), args)
+end
 
 # Inner atoms lower first and their τ substitutes into enclosing arguments
 # before `scalarize` (which would rewrite `norm` into `sqrt(sum(abs2))` and
