@@ -1463,13 +1463,13 @@ end
 end
 
 @testset "constraint atoms match Convex.jl primal, objective and dual" begin
-    convex_available = try
-        @eval import Convex
-        true
-    catch
+    convex_available = if Base.find_package("Convex") === nothing
         @info "Convex.jl not available in this environment; skipping cross-check " *
             "(the analytic assertions above already pin the same values)."
         false
+    else
+        @eval import Convex
+        true
     end
     if convex_available
         P = diagm([2.0, 3.0])

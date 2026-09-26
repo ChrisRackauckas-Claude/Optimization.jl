@@ -1229,14 +1229,14 @@ end
 # elements never contain a scalar atom. Anything else is a single component.
 function _raw_components(graw)
     graw isa AbstractVector && return _scalar_components(vec(collect(graw)))
-    Symbolics.symtype(unwrap(graw)) <: AbstractArray &&
+    SymbolicUtils.symtype(unwrap(graw)) <: AbstractArray &&
         return _scalar_components(vec(collect(Symbolics.scalarize(graw))))
     return _scalar_components([graw])
 end
 
 function _scalar_components(v)
     for e in v
-        Symbolics.symtype(unwrap(e)) <: Number || error(
+        SymbolicUtils.symtype(unwrap(e)) <: Number || error(
             "Each component of a `ConeConstraint`'s `g(u, p)` must be a scalar " *
                 "expression; got the non-scalar component `$e`."
         )
